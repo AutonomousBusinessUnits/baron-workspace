@@ -2,7 +2,7 @@
 
 This fork puts T3 Code's web interface in Baron. Each business's existing EC2
 host runs one server as its unprivileged `abu-<slug>` user. Chat, files, terminals,
-Git and previews act on that host's canonical source checkout. Autonomous business
+Git and previews act on an unprivileged working copy on that host. Autonomous business
 routines keep their existing harness and scheduler.
 
 The fork retains T3's MIT license and third-party notices. Upstream is
@@ -26,7 +26,12 @@ bash install.sh <business-slug> <fork-commit> https://trybaron.ai
 
 The installer verifies the host's recorded business, existing Linux user and source
 checkout. It installs `baron-workspace@<slug>.service`, bound to `127.0.0.1:3773`,
-with persistent state under `/var/lib/abu/<slug>/workspace`. It creates no EC2
+with a persistent checkout at `/home/abu-<slug>/workspace` and state under that
+user's `.local/share/baron-workspace`. The checkout is seeded from the canonical
+source without shared Git objects; upgrades preserve the founder's work. The
+root-owned canonical source is never made readable or writable by this user.
+Publishing changes back to the operating source still needs its existing review
+and reconciliation path. The installer creates no EC2
 instance, inbound rule, provider login or API key. Providers need that business's
 own credentials. Never give the workspace Baron's or the platform's keys.
 

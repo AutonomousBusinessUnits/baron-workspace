@@ -13,6 +13,10 @@ parent_origin=${3:?Baron origin}
 user=abu-$business
 state=/var/lib/abu/$business
 source=$state/source
+user_home=$(getent passwd "$user" | cut -d: -f6)
+[[ "$user_home" = /home/"$user" ]]
+checkout=$user_home/workspace
+workspace_state=$user_home/.local/share/baron-workspace
 node=/opt/abu/harness-node/bin/node
 [ -x "$node" ] && [ -e "$source/.git" ] && id "$user" >/dev/null
 # Refuse a source directory or host assigned to another business.
@@ -28,7 +32,12 @@ if [ ! -f "$destination/.installed" ]; then
   chmod -R a+rX,go-w "$destination"
   touch "$destination/.installed"
 fi
-install -d -m 0700 -o "$user" -g "$user" "$state/workspace"
+if [ ! -e "$checkout" ]; then
+  git clone --no-hardlinks "$source" "$checkout"
+  chown -R "$user:$user" "$checkout"
+fi
+[ -d "$checkout/.git" ] && [ ! -L "$checkout" ]
+install -d -m 0700 -o "$user" -g "$user" "$user_home/.local" "$user_home/.local/share" "$workspace_state"
 cat >"/etc/systemd/system/baron-workspace@$business.service" <<EOF
 [Unit]
 Description=Baron workspace for $business
@@ -40,10 +49,10 @@ ConditionPathIsDirectory=$source
 Type=simple
 User=$user
 Group=$user
-WorkingDirectory=$source
+WorkingDirectory=$checkout
 Environment=PATH=/opt/abu/harness-node/bin:/opt/abu/harness-cli/node_modules/.bin:/usr/local/bin:/usr/bin:/bin
 Environment=T3CODE_BARON_ORIGIN=$parent_origin
-ExecStart=$node $destination/dist/bin.mjs serve --host 127.0.0.1 --port 3773 --base-dir $state/workspace --auto-bootstrap-project-from-cwd $source
+ExecStart=$node $destination/dist/bin.mjs serve --host 127.0.0.1 --port 3773 --base-dir $workspace_state --auto-bootstrap-project-from-cwd $checkout
 Restart=on-failure
 RestartSec=5
 UMask=0077
