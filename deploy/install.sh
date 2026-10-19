@@ -32,7 +32,11 @@ if [ ! -f "$destination/.installed" ]; then
   chmod -R a+rX,go-w "$destination"
   touch "$destination/.installed"
 fi
-if [ ! -e "$checkout" ]; then
+# Stop only this installed service before copying its SQLite state and provider login.
+systemctl stop "baron-workspace@$business.service" 2>/dev/null || { ! systemctl is-active --quiet "baron-workspace@$business.service"; }
+bash "$destination/persist.sh" "$business"
+if [ ! -e "$checkout/.git" ]; then
+  [ -z "$(find "$checkout" -mindepth 1 -maxdepth 1 -print -quit)" ]
   git clone --no-hardlinks "$source" "$checkout"
   git -C "$checkout" switch -c baron-workspace
   chown -R "$user:$user" "$checkout"
@@ -46,6 +50,7 @@ Description=Baron workspace for $business
 After=network-online.target
 Wants=network-online.target
 ConditionPathIsDirectory=$source
+RequiresMountsFor=$checkout $workspace_state $user_home/.codex
 
 [Service]
 Type=simple

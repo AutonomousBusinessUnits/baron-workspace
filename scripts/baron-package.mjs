@@ -39,6 +39,7 @@ NodeFS.cpSync(NodePath.join(server, "dist"), NodePath.join(destination, "dist"),
 });
 NodeFS.cpSync(NodePath.join(root, "LICENSE"), NodePath.join(destination, "LICENSE"));
 NodeFS.cpSync(NodePath.join(root, "deploy/install.sh"), NodePath.join(destination, "install.sh"));
+NodeFS.cpSync(NodePath.join(root, "deploy/persist.sh"), NodePath.join(destination, "persist.sh"));
 NodeFS.cpSync(
   NodePath.join(root, "deploy/provider-bootstrap.ts"),
   NodePath.join(destination, "provider-bootstrap.ts"),
