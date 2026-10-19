@@ -39,6 +39,10 @@ NodeFS.cpSync(NodePath.join(server, "dist"), NodePath.join(destination, "dist"),
 });
 NodeFS.cpSync(NodePath.join(root, "LICENSE"), NodePath.join(destination, "LICENSE"));
 NodeFS.cpSync(NodePath.join(root, "deploy/install.sh"), NodePath.join(destination, "install.sh"));
+NodeFS.cpSync(
+  NodePath.join(root, "deploy/provider-bootstrap.ts"),
+  NodePath.join(destination, "provider-bootstrap.ts"),
+);
 NodeFS.writeFileSync(
   NodePath.join(destination, "package.json"),
   `${JSON.stringify({ name: "@autonomousbusinessunits/baron-workspace", version: `0.1.0-baron.${revision.slice(0, 12)}`, private: true, type: "module", dependencies }, null, 2)}\n`,

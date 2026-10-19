@@ -31,9 +31,10 @@ user's `.local/share/baron-workspace`. The checkout is seeded from the canonical
 source without shared Git objects; upgrades preserve the founder's work. The
 root-owned canonical source is never made readable or writable by this user.
 Publishing changes back to the operating source still needs its existing review
-and reconciliation path. The installer creates no EC2
-instance, inbound rule, provider login or API key. Providers need that business's
-own credentials. Never give the workspace Baron's or the platform's keys.
+and reconciliation path. The installer creates no EC2 instance, inbound rule or
+API key. If no Codex login exists, it signs in using the business's already declared
+`/abu/<slug>/secrets/openai_key`, passed to Codex through stdin. Existing founder
+logins are preserved. Never give the workspace Baron's or the platform's keys.
 
 Use SSM port forwarding for operator validation. A founder-facing deployment needs
 an authenticated HTTPS/WebSocket transport to the same loopback service and a

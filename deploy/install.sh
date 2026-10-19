@@ -39,6 +39,7 @@ if [ ! -e "$checkout" ]; then
 fi
 [ -d "$checkout/.git" ] && [ ! -L "$checkout" ]
 install -d -m 0700 -o "$user" -g "$user" "$user_home/.local" "$user_home/.local/share" "$workspace_state"
+"$node" "$destination/provider-bootstrap.ts" "$business"
 cat >"/etc/systemd/system/baron-workspace@$business.service" <<EOF
 [Unit]
 Description=Baron workspace for $business
