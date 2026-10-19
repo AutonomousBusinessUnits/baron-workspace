@@ -34,6 +34,7 @@ if [ ! -f "$destination/.installed" ]; then
 fi
 if [ ! -e "$checkout" ]; then
   git clone --no-hardlinks "$source" "$checkout"
+  git -C "$checkout" switch -c baron-workspace
   chown -R "$user:$user" "$checkout"
 fi
 [ -d "$checkout/.git" ] && [ ! -L "$checkout" ]
@@ -52,7 +53,7 @@ Group=$user
 WorkingDirectory=$checkout
 Environment=PATH=/opt/abu/harness-node/bin:/opt/abu/harness-cli/node_modules/.bin:/usr/local/bin:/usr/bin:/bin
 Environment=T3CODE_BARON_ORIGIN=$parent_origin
-ExecStart=$node $destination/dist/bin.mjs serve --host 127.0.0.1 --port 3773 --base-dir $workspace_state --auto-bootstrap-project-from-cwd $checkout
+ExecStart=$node $destination/dist/bin.mjs start --no-browser --mode web --host 127.0.0.1 --port 3773 --base-dir $workspace_state --auto-bootstrap-project-from-cwd $checkout
 Restart=on-failure
 RestartSec=5
 UMask=0077
@@ -68,4 +69,10 @@ systemctl daemon-reload
 systemctl enable --now "baron-workspace@$business.service"
 systemctl restart "baron-workspace@$business.service"
 systemctl is-active --quiet "baron-workspace@$business.service"
+ready=false
+for attempt in {1..30}; do
+  if curl --max-time 2 --fail --silent http://127.0.0.1:3773/ >/dev/null; then ready=true; break; fi
+  sleep 1
+done
+[ "$ready" = true ] || { printf 'The workspace did not answer HTTP. Read its service journal.\n' >&2; exit 1; }
 printf 'Baron workspace installed for %s at release %s; loopback port 3773.\n' "$business" "$release"
