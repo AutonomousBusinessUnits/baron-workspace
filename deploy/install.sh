@@ -65,6 +65,8 @@ KillMode=control-group
 [Install]
 WantedBy=multi-user.target
 EOF
+install -d -m 0700 /etc/abu/baron-workspace
+"$node" -e 'require("node:fs").writeFileSync(process.argv[1],JSON.stringify({slug:process.argv[2],revision:process.argv[3]}),{mode:0o600})' "/etc/abu/baron-workspace/$business.json" "$business" "$release"
 systemctl daemon-reload
 systemctl enable --now "baron-workspace@$business.service"
 systemctl restart "baron-workspace@$business.service"

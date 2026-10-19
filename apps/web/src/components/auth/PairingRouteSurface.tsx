@@ -45,6 +45,7 @@ export function PairingRouteSurface({
 
   const submitCredential = async (nextCredential: string) => {
     setIsSubmitting(true);
+    setCredential("");
     setErrorMessage("");
 
     const submitError = await submitServerAuthCredential(nextCredential).then(
@@ -82,6 +83,18 @@ export function PairingRouteSurface({
     stripPairingTokenFromUrl();
     autoSubmit(autoPairToken);
   }, [autoPairToken]);
+
+  if (autoPairToken && !errorMessage) {
+    return (
+      <StandalonePage tone="pairing">
+        <StandalonePageHeader
+          eyebrow={APP_DISPLAY_NAME}
+          title="Opening workspace"
+          description="Signing you in and connecting to your server."
+        />
+      </StandalonePage>
+    );
+  }
 
   return (
     <StandalonePage tone="pairing">

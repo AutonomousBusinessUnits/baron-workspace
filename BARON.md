@@ -40,13 +40,13 @@ an authenticated HTTPS/WebSocket transport to the same loopback service and a
 separate browser origin for each business. Do not expose port 3773 publicly.
 
 Set `T3CODE_BARON_ORIGIN` to the exact parent origin. HTML responses then restrict
-framing to that origin. T3's pairing and permission checks still apply; framing is
+framing to that origin. Baron requests a one-use sign-in through the business's existing signed portal. The portal verifies the current founder and encrypts its reply to that request; SSM retains no usable credential. The browser exchanges the launch link automatically, then uses T3's normal scoped session. Framing is
 not authentication. Baron binds its workspace page to the business's enrolled
 EC2 instance, through `BARON_T3_WORKSPACES` in the platform checkout.
 
 ## Verify and roll back
 
-Verify the service, pair through T3, open a terminal, check `uname -s` and the
+Verify the service, open Workspace in Baron, open a terminal, check `uname -s` and the
 working directory, then write and read a nonsecret marker on the business's own
 host. An agent answer additionally requires a successful provider turn; a running
 server does not prove model access.
