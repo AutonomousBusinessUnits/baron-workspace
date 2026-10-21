@@ -26,6 +26,28 @@ export async function bootstrapBusinessCodex(input: {
   return { status: "configured" };
 }
 
+/** The founder user the host's unit record names; the routine run user never holds this login. */
+function readFounder(slug: string): string {
+  const unavailable = () =>
+    new Error("Install the platform release that creates the founder user first.");
+  let record;
+  try {
+    record = JSON.parse(NodeFS.readFileSync(`/etc/abu/harness/${slug}/unit.json`, "utf8"));
+  } catch {
+    throw unavailable();
+  }
+  if (
+    record.unit !== slug ||
+    !Number.isInteger(record.slot) ||
+    record.slot < 0 ||
+    record.slot > 8 ||
+    record.founder_user !== `abu-founder-${record.slot}` ||
+    record.founder_uid !== 2101 + record.slot
+  )
+    throw unavailable();
+  return record.founder_user;
+}
+
 export async function installBusinessCodex(slug: string) {
   if (process.getuid?.() !== 0 || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(slug))
     throw new Error("Managed root provider setup is required.");
@@ -37,7 +59,8 @@ export async function installBusinessCodex(slug: string) {
     host.region !== "us-east-1"
   )
     throw new Error("The business host identity differs.");
-  const home = `/home/abu-${slug}`;
+  const founder = readFounder(slug);
+  const home = `/home/${founder}`;
   return bootstrapBusinessCodex({
     slug,
     manifest: NodeFS.readFileSync(`/var/lib/abu/${slug}/source/abus/${slug}/abu.yaml`, "utf8"),
@@ -73,7 +96,7 @@ export async function installBusinessCodex(slug: string) {
           "runuser",
           [
             "-u",
-            `abu-${slug}`,
+            founder,
             "--",
             "env",
             `HOME=${home}`,
