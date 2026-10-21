@@ -121,7 +121,7 @@ test("root creates nothing below the founder's home with install -d", () => {
 test("root chowns only paths the founder cannot redirect", () => {
   for (const script of [install, persist]) {
     for (const line of code(script).filter((l) => /\bchown\b/.test(l))) {
-      assert.match(line, /"\$(retained|checkout|destination)"\s*$/, line);
+      assert.match(line, /"\$(retained|checkout|clone|destination)"\s*$/, line);
     }
   }
 });
@@ -147,8 +147,52 @@ test("every root operation on a founder-home path follows a symlink check of tha
     'systemctl start "$unit"',
   );
   before(persist, 'refuse_symlinks_under "$home" "$backup"', 'mv "$target" "$backup"');
-  before(install, 'refuse_symlinks_under "$founder_home" "$checkout"', "git clone", 'chown -R "$founder:$founder" "$checkout"');
+  before(install, 'refuse_symlinks_under "$founder_home" "$checkout"', "git clone", 'chown -hR "$founder:$founder" "$checkout"');
   before(install, 'refuse_symlinks_under "$founder_home" "$workspace_state"', "founder_mkdir");
+  // The recovery path stats and chowns the checkout's .git, so the second check precedes both.
+  const lines = code(install);
+  const checks = lines.flatMap((l, i) => (l.includes('refuse_symlinks_under "$founder_home" "$checkout"') ? [i] : []));
+  assert.equal(checks.length, 2, "once before the clone, once before the recovery");
+  assert.ok(checks[1] < lines.findIndex((l) => l.includes('stat -c %u "$checkout/.git"')));
+  assert.ok(checks[1] < lines.findIndex((l) => l.includes('chown -hR "$founder:$founder" "$checkout"')));
+});
+
+test("no git command runs as root in the founder's checkout", () => {
+  const gitLines = code(install).filter((l) => /\bgit\b/.test(l) && !/^\s*(if|\[)/.test(l));
+  assert.ok(gitLines.length >= 2, "install.sh runs git for the clone and the switch");
+  for (const line of gitLines) {
+    if (line.includes('git clone --no-hardlinks "$source" "$clone"')) {
+      // Root clones only into a root-owned folder it made itself, never into the checkout.
+      assert.doesNotMatch(line, /\$checkout/, line);
+      continue;
+    }
+    assert.match(line, /^\s*runuser -u "\$founder" -- env HOME="\$founder_home" git /, line);
+  }
+  assert.match(install, /^ {2}clone_parent=\$\(mktemp -d \/var\/tmp\/baron-workspace-clone\.XXXXXX\)$/m);
+  assert.match(install, /^ {2}clone=\$clone_parent\/checkout$/m);
+  assert.doesNotMatch(install, /^\s*git -C "\$checkout"/m);
+});
+
+test("the checkout is handed to the founder before the founder switches its branch", () => {
+  const lines = code(install);
+  const at = (needle) => {
+    const i = lines.findIndex((l) => l.includes(needle));
+    assert.notEqual(i, -1, `${needle} is missing`);
+    return i;
+  };
+  const clone = at("git clone --no-hardlinks");
+  const chownClone = at('chown -hR "$founder:$founder" "$clone"');
+  const copy = at('cp -a "$clone/." "$checkout/"');
+  const chownCheckout = at('chown -hR "$founder:$founder" "$checkout"');
+  const sw = at("switch -c baron-workspace");
+  assert.ok(clone < chownClone && chownClone < copy, "clone, then hand over, then place it");
+  assert.ok(copy < sw && chownCheckout < sw, "every hand-over precedes the switch");
+  // The copy and the switch both run as the founder.
+  assert.match(lines[copy], /runuser -u "\$founder" --/);
+  assert.match(lines[sw], /runuser -u "\$founder" --/);
+  // A .git still owned by root (a failed earlier run) is finished by the same switch.
+  assert.match(install, /if \[ "\$\(stat -c %u "\$checkout\/\.git"\)" = 0 \]; then\n\s+chown -hR "\$founder:\$founder" "\$checkout"\n\s+make_branch=true\nfi/);
+  assert.match(install, /if \[ "\$make_branch" = true \]; then\n\s+runuser -u "\$founder" -- env HOME="\$founder_home" git -C "\$checkout" switch -c baron-workspace\nfi/);
 });
 
 // refuse_symlinks_under needs no root, so it runs here against a planted layout.

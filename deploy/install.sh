@@ -36,20 +36,35 @@ fi
 systemctl stop "baron-workspace@$business.service" 2>/dev/null || { ! systemctl is-active --quiet "baron-workspace@$business.service"; }
 quiesce_founder
 bash "$destination/persist.sh" "$business"
+# Git never runs as root in a folder root does not own: persist.sh made the checkout the founder's,
+# and Git as root there refuses it ("dubious ownership") and would run the repository's hooks as root.
+# A new checkout is cloned by root into a root-owned folder, handed to the founder, then copied in
+# by the founder; the branch is always made by the founder.
+make_branch=false
 if [ ! -e "$checkout/.git" ]; then
   refuse_symlinks_under "$founder_home" "$checkout"
   [ -z "$(find "$checkout" -mindepth 1 -maxdepth 1 -print -quit)" ]
-  git clone --no-hardlinks "$source" "$checkout"
-fi
-# A checkout root still owns is this installer's own clone, from this run or an interrupted one.
-# persist.sh made the folder the founder's, so git as root refuses it ("dubious ownership"): hand the
-# clone over first, then make the branch as the founder, which also never runs the repository's hooks as root.
-if [ "$(stat -c %u "$checkout/.git")" = 0 ]; then
-  chown -R "$founder:$founder" "$checkout"
-  runuser -u "$founder" -- env HOME="$founder_home" git -C "$checkout" switch -c baron-workspace
+  clone_parent=$(mktemp -d /var/tmp/baron-workspace-clone.XXXXXX)
+  trap 'rm -rf "$clone_parent"' EXIT
+  clone=$clone_parent/checkout
+  git clone --no-hardlinks "$source" "$clone"
+  chown -hR "$founder:$founder" "$clone"
+  chmod 0711 "$clone_parent"
+  runuser -u "$founder" -- env HOME="$founder_home" cp -a "$clone/." "$checkout/"
+  rm -rf "$clone_parent"
+  trap - EXIT
+  make_branch=true
 fi
 refuse_symlinks_under "$founder_home" "$checkout"
 refuse_symlinks_under "$founder_home" "$workspace_state"
+# A .git root still owns is left by a failed run of an earlier installer: hand it to the founder too.
+if [ "$(stat -c %u "$checkout/.git")" = 0 ]; then
+  chown -hR "$founder:$founder" "$checkout"
+  make_branch=true
+fi
+if [ "$make_branch" = true ]; then
+  runuser -u "$founder" -- env HOME="$founder_home" git -C "$checkout" switch -c baron-workspace
+fi
 [ -d "$checkout/.git" ]
 # Made as the founder: root never follows a founder-planted symlink to create or own a directory.
 founder_mkdir "$workspace_state"
