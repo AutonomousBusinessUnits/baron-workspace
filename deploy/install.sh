@@ -38,8 +38,13 @@ bash "$destination/persist.sh" "$business"
 if [ ! -e "$checkout/.git" ]; then
   [ -z "$(find "$checkout" -mindepth 1 -maxdepth 1 -print -quit)" ]
   git clone --no-hardlinks "$source" "$checkout"
-  git -C "$checkout" switch -c baron-workspace
+fi
+# A checkout root still owns is this installer's own clone, from this run or an interrupted one.
+# persist.sh made the folder the user's, so git as root refuses it ("dubious ownership"): hand the
+# clone over first, then make the branch as the user, which also never runs the repository's hooks as root.
+if [ "$(stat -c %u "$checkout/.git")" = 0 ]; then
   chown -R "$user:$user" "$checkout"
+  runuser -u "$user" -- env HOME="$user_home" git -C "$checkout" switch -c baron-workspace
 fi
 [ -d "$checkout/.git" ] && [ ! -L "$checkout" ]
 install -d -m 0700 -o "$user" -g "$user" "$user_home/.local" "$user_home/.local/share" "$workspace_state"
