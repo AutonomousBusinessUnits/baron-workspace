@@ -45,3 +45,32 @@ refuse_symlinks_under() {
 founder_mkdir() {
   runuser -u "$founder" -- bash -c 'umask 077; exec mkdir -p -m 0700 -- "$@"' _ "$@"
 }
+
+# Ends every process the founder has. The workspace service is stopped, but the founder can also
+# hold processes outside its cgroup (a login session, a stray daemon). Any of them could swap a
+# directory for a symlink between a check and root's use of the path, so the installer
+# refuses to go on while one exists. SSH, cron and at are denied to the founder by the host installer.
+quiesce_founder() {
+  local attempt
+  loginctl terminate-user "$founder" 2>/dev/null || true
+  pkill -KILL -U "$founder_uid" || true
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    pgrep -U "$founder_uid" >/dev/null || return 0
+    sleep 0.5
+    pkill -KILL -U "$founder_uid" || true
+  done
+  printf 'The founder still has running processes. Stop them, then install again.\n' >&2
+  exit 1
+}
+
+# After a bind mount: the literal target is a mount point, no component below the home is a
+# symlink, it resolves to itself, and it is the retained directory. A swap that mounted the
+# retained directory over some other directory fails one of these.
+# Usage: verify_bind_mount <home> <target> <retained>
+verify_bind_mount() {
+  local home=$1 target=$2 retained=$3
+  refuse_symlinks_under "$home" "$target" || return 1
+  mountpoint -q "$target" || { printf 'Workspace path is not a mount.\n' >&2; return 1; }
+  [ "$(realpath -e -- "$target")" = "$target" ] || { printf 'Workspace path resolves elsewhere.\n' >&2; return 1; }
+  [ "$target" -ef "$retained" ] || { printf 'Workspace path is not the retained directory.\n' >&2; return 1; }
+}

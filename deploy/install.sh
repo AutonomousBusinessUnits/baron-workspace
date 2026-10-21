@@ -34,6 +34,7 @@ if [ ! -f "$destination/.installed" ]; then
 fi
 # Stop only this installed service before copying its SQLite state and provider login.
 systemctl stop "baron-workspace@$business.service" 2>/dev/null || { ! systemctl is-active --quiet "baron-workspace@$business.service"; }
+quiesce_founder
 bash "$destination/persist.sh" "$business"
 if [ ! -e "$checkout/.git" ]; then
   refuse_symlinks_under "$founder_home" "$checkout"

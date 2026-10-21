@@ -13,6 +13,7 @@ old_home=/home/abu-$business
 run_uid=$(id -u "abu-$business")
 state=/var/lib/abu/$business/coding-workspace
 ! systemctl is-active --quiet "baron-workspace@$business.service"
+quiesce_founder
 install -d -m 0700 "$state"
 # Made as the founder: root never follows a founder-planted symlink to create or own a directory.
 founder_mkdir "$home/.local/share"
@@ -84,5 +85,8 @@ Options=bind
 EOF
   systemctl daemon-reload
   systemctl start "$unit"
-  [ "$target" -ef "$retained" ]
+  verify_bind_mount "$home" "$target" "$retained" || {
+    systemctl stop "$unit" || true
+    exit 1
+  }
 done

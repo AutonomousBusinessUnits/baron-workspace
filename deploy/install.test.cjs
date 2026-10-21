@@ -169,6 +169,125 @@ test("refuse_symlinks_under walks every component below the home", () => {
   }
 });
 
+test("the installer ends the founder's processes before it touches their home", () => {
+  assert.match(helper, /loginctl terminate-user "\$founder"/);
+  assert.match(helper, /pkill -KILL -U "\$founder_uid"/);
+  assert.match(helper, /pgrep -U "\$founder_uid"/);
+  const order = (script, first, second) => {
+    const lines = code(script);
+    const a = lines.findIndex((l) => l.includes(first));
+    const b = lines.findIndex((l) => l.includes(second));
+    assert.ok(a !== -1 && b !== -1 && a < b, `${first} must come before ${second}`);
+  };
+  order(install, "systemctl stop", "quiesce_founder");
+  order(install, "quiesce_founder", 'bash "$destination/persist.sh"');
+  order(persist, "is-active", "quiesce_founder");
+  order(persist, "quiesce_founder", "founder_mkdir");
+  order(persist, "quiesce_founder", "refuse_symlinks_under");
+});
+
+// Stand-ins for the process tools, so quiesce_founder runs without root or real processes.
+function quiesce(survivors) {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), "baron-quiesce-"));
+  try {
+    const shim = (name, body) => {
+      fs.writeFileSync(path.join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    };
+    shim("loginctl", "exit 1");
+    shim("pkill", "exit 1");
+    shim("sleep", "exit 0");
+    shim("pgrep", survivors ? "exit 0" : "exit 1");
+    return spawnSync(
+      "bash",
+      ["-c", 'source "$1"; founder=abu-founder-1; founder_uid=2102; quiesce_founder; echo continued', "_", path.join(__dirname, "founder-record.sh")],
+      { encoding: "utf8", env: { PATH: `${bin}:/usr/bin:/bin` } },
+    );
+  } finally {
+    fs.rmSync(bin, { recursive: true, force: true });
+  }
+}
+
+test("quiesce_founder refuses to continue while the founder has a process", () => {
+  const alive = quiesce(true);
+  assert.equal(alive.status, 1);
+  assert.match(alive.stderr, /founder still has running processes/);
+  assert.doesNotMatch(alive.stdout, /continued/);
+  const clear = quiesce(false);
+  assert.equal(clear.status, 0, clear.stderr);
+  assert.match(clear.stdout, /continued/);
+});
+
+test("persist.sh verifies each mount and unmounts one that is not the retained directory", () => {
+  assert.match(persist, /verify_bind_mount "\$home" "\$target" "\$retained" \|\| \{\n\s+systemctl stop "\$unit" \|\| true\n\s+exit 1/);
+  const lines = code(persist);
+  const start = lines.findIndex((l) => l.includes('systemctl start "$unit"'));
+  assert.ok(lines[start + 1].includes("verify_bind_mount"), "the check follows the mount at once");
+  assert.match(helper, /mountpoint -q "\$target"/);
+  assert.match(helper, /realpath -e -- "\$target"/);
+});
+
+function verifyMount(home, target, retained) {
+  return spawnSync(
+    "bash",
+    ["-c", 'source "$1"; verify_bind_mount "$2" "$3" "$4"', "_", path.join(__dirname, "founder-record.sh"), home, target, retained],
+    { encoding: "utf8" },
+  );
+}
+
+test("verify_bind_mount refuses a target that is a symlink, crosses one, or is no mount", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "baron-mount-check-"));
+  try {
+    const home = path.join(root, "home");
+    const retained = path.join(root, "retained");
+    const elsewhere = path.join(root, "elsewhere");
+    fs.mkdirSync(path.join(home, "dir"), { recursive: true });
+    fs.mkdirSync(retained);
+    fs.mkdirSync(path.join(elsewhere, "dir"), { recursive: true });
+
+    const plain = verifyMount(home, `${home}/dir`, retained);
+    assert.equal(plain.status, 1);
+    assert.match(plain.stderr, /not a mount/);
+
+    fs.symlinkSync(retained, path.join(home, "link"));
+    const leaf = verifyMount(home, `${home}/link`, retained);
+    assert.equal(leaf.status, 1);
+    assert.match(leaf.stderr, /symlink/);
+
+    fs.symlinkSync(elsewhere, path.join(home, "moved"));
+    const ancestor = verifyMount(home, `${home}/moved/dir`, retained);
+    assert.equal(ancestor.status, 1);
+    assert.match(ancestor.stderr, /symlink/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("verify_bind_mount accepts a real bind mount and refuses one that hides another directory", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "baron-mount-real-"));
+  try {
+    const home = path.join(root, "home");
+    const retained = path.join(root, "retained");
+    const other = path.join(root, "other");
+    for (const dir of [path.join(home, "dir"), retained, other]) fs.mkdirSync(dir, { recursive: true });
+    // An unprivileged user namespace lets this run without root; skip where the host forbids it.
+    const probe = spawnSync("unshare", ["-rm", "true"]);
+    if (probe.status !== 0) return t.skip("user and mount namespaces are unavailable");
+    const run = (body) =>
+      spawnSync(
+        "unshare",
+        ["-rm", "bash", "-c", `source "$1"; ${body}`, "_", path.join(__dirname, "founder-record.sh"), home, retained, other],
+        { encoding: "utf8" },
+      );
+    const good = run('mount --bind "$2" "$1/dir"; verify_bind_mount "$1" "$1/dir" "$2"');
+    assert.equal(good.status, 0, good.stderr);
+    const wrong = run('mount --bind "$3" "$1/dir"; verify_bind_mount "$1" "$1/dir" "$2"');
+    assert.equal(wrong.status, 1);
+    assert.match(wrong.stderr, /not the retained directory/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("provider-bootstrap.ts takes the founder from the unit record", () => {
   assert.doesNotMatch(bootstrap, /abu-\$\{slug\}/);
   assert.match(bootstrap, /\/etc\/abu\/harness\/\$\{slug\}\/unit\.json/);
