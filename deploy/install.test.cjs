@@ -82,6 +82,30 @@ test("persist.sh retires the run user's mount units and hands each entry to the 
   assert.match(persist, /baron-root-backup/);
 });
 
+test("persist.sh refuses a hard link in a retained entry before it chowns", () => {
+  const guard = 'find "$retained" ! -type d -links +1 -print -quit';
+  assert.ok(persist.includes(guard));
+  assert.ok(persist.indexOf(guard) < persist.indexOf('chown -hR "$founder:$founder" "$retained"'));
+  assert.match(persist, /hard link[^\n]*\\n' >&2\n\s+exit 1/);
+  // The same expression, run on a real tree: silent for plain files, a hit for a shared inode.
+  const { mkdtempSync, writeFileSync, linkSync, mkdirSync, rmSync } = require("node:fs");
+  const { tmpdir } = require("node:os");
+  const { join } = require("node:path");
+  const { execFileSync } = require("node:child_process");
+  const retained = mkdtempSync(join(tmpdir(), "baron-retained-"));
+  try {
+    mkdirSync(join(retained, "sub"));
+    writeFileSync(join(retained, "sub", "a"), "x");
+    const hits = () =>
+      execFileSync("bash", ["-c", `retained=$1; ${guard}`, "_", retained], { encoding: "utf8" });
+    assert.equal(hits(), "");
+    linkSync(join(retained, "sub", "a"), join(retained, "b"));
+    assert.notEqual(hits(), "");
+  } finally {
+    rmSync(retained, { recursive: true, force: true });
+  }
+});
+
 test("root creates nothing below the founder's home with install -d", () => {
   for (const script of [install, persist]) {
     for (const line of code(script).filter((l) => /\binstall -d\b/.test(l))) {

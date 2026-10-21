@@ -66,6 +66,12 @@ for entry in project state codex; do
   if [ "$(cat "$marker" 2>/dev/null || true)" != "$founder_uid" ]; then
     owner=$(stat -c %u "$retained")
     [ "$owner" = "$run_uid" ] || [ "$owner" = "$founder_uid" ] || { printf 'Workspace state has an unexpected owner.\n' >&2; exit 1; }
+    # A routine run could have planted a hardlink to an inode it owns elsewhere; chown would hand
+    # that inode to the founder along with the entry.
+    if [ -n "$(find "$retained" ! -type d -links +1 -print -quit)" ]; then
+      printf 'Workspace state holds a hard link; remove it before the founder takes the entry.\n' >&2
+      exit 1
+    fi
     chown -hR "$founder:$founder" "$retained"
     sync -f "$retained"
     printf '%s\n' "$founder_uid" >"$marker"
