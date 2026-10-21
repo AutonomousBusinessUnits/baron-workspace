@@ -6,22 +6,16 @@ business=${1:?business slug}
 [[ $business =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)*$ && ${#business} -le 40 ]]
 [ "$(id -u)" = 0 ]
 mountpoint -q /var/lib/abu
-node=/opt/abu/harness-node/bin/node
-# The founder user comes from the host's unit record; the routine run user keeps no workspace files.
-founder_record=$("$node" -e 'const r=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")); const slot=r.slot; if(r.unit!==process.argv[2]||!Number.isInteger(slot)||slot<0||slot>8||r.founder_user!=="abu-founder-"+slot||r.founder_uid!==2101+slot)process.exit(1); console.log(r.founder_user+" "+r.founder_uid)' "/etc/abu/harness/$business/unit.json" "$business" 2>/dev/null) || {
-  printf 'Install the platform release that creates the founder user first.\n' >&2
-  exit 1
-}
-read -r founder founder_uid <<<"$founder_record"
-[ "$(id -u "$founder")" = "$founder_uid" ]
-home=/home/$founder
+source "$(dirname "${BASH_SOURCE[0]}")/founder-record.sh"
+load_founder "$business"
+home=$founder_home
 old_home=/home/abu-$business
 run_uid=$(id -u "abu-$business")
 state=/var/lib/abu/$business/coding-workspace
-[ "$(getent passwd "$founder" | cut -d: -f6)" = "$home" ]
 ! systemctl is-active --quiet "baron-workspace@$business.service"
 install -d -m 0700 "$state"
-install -d -m 0700 -o "$founder" -g "$founder" "$home/.local" "$home/.local/share"
+# Made as the founder: root never follows a founder-planted symlink to create or own a directory.
+founder_mkdir "$home/.local/share"
 for entry in project state codex; do
   case $entry in
     project) target=$home/workspace ;;
@@ -42,7 +36,8 @@ for entry in project state codex; do
     rm -f "/etc/systemd/system/$old_unit"
     systemctl daemon-reload
   fi
-  [ ! -L "$retained" ] && [ ! -L "$target" ]
+  [ ! -L "$retained" ]
+  refuse_symlinks_under "$home" "$target"
   if mountpoint -q "$target"; then
     [ "$target" -ef "$retained" ] || { printf 'Workspace path has an unexpected mount.\n' >&2; exit 1; }
   else
@@ -57,10 +52,11 @@ for entry in project state codex; do
     # A replacement root disk can have fresh files here. Retain those separately; the retained disk is authoritative.
     if [ -e "$target" ] && [ -n "$(find "$target" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
       backup=$target.baron-root-backup
+      refuse_symlinks_under "$home" "$backup"
       [ ! -e "$backup" ] || { printf 'Reconcile the existing root-disk workspace backup first.\n' >&2; exit 1; }
       mv "$target" "$backup"
     fi
-    install -d -m 0700 -o "$founder" -g "$founder" "$target"
+    founder_mkdir "$target"
   fi
   [ -d "$retained" ]
   # Hand an entry the routine run user wrote to the founder. An interrupted chown can leave the
@@ -69,7 +65,7 @@ for entry in project state codex; do
   if [ "$(cat "$marker" 2>/dev/null || true)" != "$founder_uid" ]; then
     owner=$(stat -c %u "$retained")
     [ "$owner" = "$run_uid" ] || [ "$owner" = "$founder_uid" ] || { printf 'Workspace state has an unexpected owner.\n' >&2; exit 1; }
-    chown -R "$founder:$founder" "$retained"
+    chown -hR "$founder:$founder" "$retained"
     sync -f "$retained"
     printf '%s\n' "$founder_uid" >"$marker"
   fi
