@@ -158,19 +158,22 @@ test("every root operation on a founder-home path follows a symlink check of tha
 });
 
 test("no git command runs as root in the founder's checkout", () => {
-  const gitLines = code(install).filter((l) => /\bgit\b/.test(l) && !/^\s*(if|\[)/.test(l));
-  assert.ok(gitLines.length >= 2, "install.sh runs git for the clone and the switch");
+  // Every code line that runs git, whatever surrounds it (if, !, $(...), a pipe).
+  const gitLines = code(install).filter((l) => /(^|[\s;&|(])git\s/.test(l));
+  assert.equal(gitLines.length, 3, "the clone, the branch check and the switch");
   for (const line of gitLines) {
     if (line.includes('git clone --no-hardlinks "$source" "$clone"')) {
       // Root clones only into a root-owned folder it made itself, never into the checkout.
       assert.doesNotMatch(line, /\$checkout/, line);
+      assert.match(line, /^\s*git clone /, line);
       continue;
     }
-    assert.match(line, /^\s*runuser -u "\$founder" -- env HOME="\$founder_home" git /, line);
+    assert.match(line, /runuser -u "\$founder" -- env HOME="\$founder_home" git -C "\$checkout" /, line);
   }
   assert.match(install, /^ {2}clone_parent=\$\(mktemp -d \/var\/tmp\/baron-workspace-clone\.XXXXXX\)$/m);
   assert.match(install, /^ {2}clone=\$clone_parent\/checkout$/m);
-  assert.doesNotMatch(install, /^\s*git -C "\$checkout"/m);
+  assert.match(install, /^ {2}chgrp "\$founder" "\$clone_parent"\n {2}chmod 0710 "\$clone_parent"$/m);
+  assert.doesNotMatch(install, /0711/);
 });
 
 test("the checkout is handed to the founder before the founder switches its branch", () => {
@@ -182,7 +185,7 @@ test("the checkout is handed to the founder before the founder switches its bran
   };
   const clone = at("git clone --no-hardlinks");
   const chownClone = at('chown -hR "$founder:$founder" "$clone"');
-  const copy = at('cp -a "$clone/." "$checkout/"');
+  const copy = at('cp -a "$entry" "$2/"');
   const chownCheckout = at('chown -hR "$founder:$founder" "$checkout"');
   const sw = at("switch -c baron-workspace");
   assert.ok(clone < chownClone && chownClone < copy, "clone, then hand over, then place it");
@@ -190,9 +193,98 @@ test("the checkout is handed to the founder before the founder switches its bran
   // The copy and the switch both run as the founder.
   assert.match(lines[copy], /runuser -u "\$founder" --/);
   assert.match(lines[sw], /runuser -u "\$founder" --/);
-  // A .git still owned by root (a failed earlier run) is finished by the same switch.
-  assert.match(install, /if \[ "\$\(stat -c %u "\$checkout\/\.git"\)" = 0 \]; then\n\s+chown -hR "\$founder:\$founder" "\$checkout"\n\s+make_branch=true\nfi/);
-  assert.match(install, /if \[ "\$make_branch" = true \]; then\n\s+runuser -u "\$founder" -- env HOME="\$founder_home" git -C "\$checkout" switch -c baron-workspace\nfi/);
+});
+
+test("the founder's copy puts .git in last, through .git.partial", () => {
+  const copy = code(install).find((l) => l.includes(".git.partial"));
+  assert.ok(copy, "the copy renames .git.partial");
+  assert.match(copy, /\[ "\$\{entry##\*\/\}" = \.git \] \|\| cp -a "\$entry" "\$2\/"/);
+  const partial = copy.indexOf('cp -a "$1/.git" "$2/.git.partial"');
+  assert.notEqual(partial, -1);
+  assert.ok(copy.indexOf('cp -a "$entry"') < partial);
+  assert.ok(partial < copy.indexOf('mv "$2/.git.partial" "$2/.git"'));
+  assert.match(copy, /^\s*runuser -u "\$founder" -- /);
+  // A leftover .git.partial or a partial tree is not empty, so the next install stops.
+  assert.match(install, /^ {2}\[ -z "\$\(find "\$checkout" -mindepth 1 -maxdepth 1 -print -quit\)" \]$/m);
+});
+
+test("the founder's copy, run on a real tree, leaves .git last and complete", () => {
+  const copy = code(install).find((l) => l.includes(".git.partial"));
+  const script = copy.match(/bash -c '([^']*)'/)[1];
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "baron-copy-"));
+  try {
+    const clone = path.join(root, "clone");
+    const checkout = path.join(root, "checkout");
+    fs.mkdirSync(path.join(clone, ".git/objects"), { recursive: true });
+    fs.mkdirSync(path.join(clone, "src"));
+    fs.writeFileSync(path.join(clone, ".git/HEAD"), "ref: refs/heads/main\n");
+    fs.writeFileSync(path.join(clone, "src/a"), "a");
+    fs.writeFileSync(path.join(clone, ".hidden"), "h");
+    fs.mkdirSync(checkout);
+    const run = spawnSync("bash", ["-c", script, "_", clone, checkout], { encoding: "utf8" });
+    assert.equal(run.status, 0, run.stderr);
+    assert.deepEqual(fs.readdirSync(checkout).sort(), [".git", ".hidden", "src"]);
+    assert.equal(fs.readFileSync(path.join(checkout, ".git/HEAD"), "utf8"), "ref: refs/heads/main\n");
+    assert.equal(fs.existsSync(path.join(checkout, ".git.partial")), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the branch is made whenever the founder's Git says it is missing", () => {
+  const guard =
+    'if ! runuser -u "$founder" -- env HOME="$founder_home" git -C "$checkout" rev-parse --verify --quiet refs/heads/baron-workspace >/dev/null; then';
+  assert.ok(install.includes(guard), "the branch is decided by asking Git as the founder");
+  assert.doesNotMatch(install, /make_branch/);
+  const start = install.indexOf(guard);
+  const block = install.slice(start, install.indexOf("\nfi\n", start) + 4);
+  assert.match(block, /switch -c baron-workspace/);
+  // Run the real block against a stub runuser that logs each call, for a founder-owned checkout
+  // (persist.sh's migration, or an earlier run that died before the switch) with and without the branch.
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), "baron-runuser-"));
+  try {
+    const log = path.join(bin, "log");
+    fs.writeFileSync(
+      path.join(bin, "runuser"),
+      `#!/bin/sh\necho "$*" >>"$LOG"\ncase "$*" in *rev-parse*) [ "$HAS_BRANCH" = yes ] ;; esac\n`,
+      { mode: 0o755 },
+    );
+    const run = (hasBranch) => {
+      fs.writeFileSync(log, "");
+      const result = spawnSync("bash", ["-c", `set -e; ${block}`], {
+        encoding: "utf8",
+        env: {
+          PATH: `${bin}:/usr/bin:/bin`,
+          LOG: log,
+          HAS_BRANCH: hasBranch,
+          founder: "abu-founder-1",
+          founder_home: "/home/abu-founder-1",
+          checkout: "/home/abu-founder-1/workspace",
+        },
+      });
+      assert.equal(result.status, 0, result.stderr);
+      return fs.readFileSync(log, "utf8").trim().split("\n");
+    };
+    const missing = run("no");
+    assert.equal(missing.length, 2);
+    assert.match(missing[0], /^-u abu-founder-1 -- env HOME=\/home\/abu-founder-1 git -C .* rev-parse --verify --quiet refs\/heads\/baron-workspace$/);
+    assert.match(missing[1], /^-u abu-founder-1 -- env HOME=\/home\/abu-founder-1 git -C .* switch -c baron-workspace$/);
+    const present = run("yes");
+    assert.equal(present.length, 1, "an existing branch is left alone");
+    assert.match(present[0], /rev-parse/);
+  } finally {
+    fs.rmSync(bin, { recursive: true, force: true });
+  }
+});
+
+test("a root-owned .git is handed to the founder only after the hard-link refusal", () => {
+  const lines = code(install);
+  const stat = lines.findIndex((l) => l.includes('stat -c %u "$checkout/.git"'));
+  const refusal = lines.findIndex((l) => l.includes('find "$checkout" ! -type d -links +1 -print -quit'));
+  const chown = lines.findIndex((l) => l.includes('chown -hR "$founder:$founder" "$checkout"'));
+  assert.ok(stat !== -1 && stat < refusal && refusal < chown);
+  assert.match(lines[refusal + 1], /hard link/);
+  assert.match(lines[refusal + 2], /exit 1/);
 });
 
 // refuse_symlinks_under needs no root, so it runs here against a planted layout.

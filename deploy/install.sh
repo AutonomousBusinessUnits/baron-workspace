@@ -38,9 +38,9 @@ quiesce_founder
 bash "$destination/persist.sh" "$business"
 # Git never runs as root in a folder root does not own: persist.sh made the checkout the founder's,
 # and Git as root there refuses it ("dubious ownership") and would run the repository's hooks as root.
-# A new checkout is cloned by root into a root-owned folder, handed to the founder, then copied in
-# by the founder; the branch is always made by the founder.
-make_branch=false
+# A new checkout is cloned by root into a root-owned folder and handed to the founder, who copies it
+# in; .git goes last, through .git.partial, so a run that died part way leaves a folder that is not
+# empty and not a repository, and the next install stops instead of treating it as finished.
 if [ ! -e "$checkout/.git" ]; then
   refuse_symlinks_under "$founder_home" "$checkout"
   [ -z "$(find "$checkout" -mindepth 1 -maxdepth 1 -print -quit)" ]
@@ -49,20 +49,27 @@ if [ ! -e "$checkout/.git" ]; then
   clone=$clone_parent/checkout
   git clone --no-hardlinks "$source" "$clone"
   chown -hR "$founder:$founder" "$clone"
-  chmod 0711 "$clone_parent"
-  runuser -u "$founder" -- env HOME="$founder_home" cp -a "$clone/." "$checkout/"
+  chgrp "$founder" "$clone_parent"
+  chmod 0710 "$clone_parent"
+  runuser -u "$founder" -- env HOME="$founder_home" bash -c 'set -e; shopt -s dotglob nullglob; for entry in "$1"/*; do [ "${entry##*/}" = .git ] || cp -a "$entry" "$2/"; done; cp -a "$1/.git" "$2/.git.partial"; mv "$2/.git.partial" "$2/.git"' _ "$clone" "$checkout"
   rm -rf "$clone_parent"
   trap - EXIT
-  make_branch=true
 fi
 refuse_symlinks_under "$founder_home" "$checkout"
 refuse_symlinks_under "$founder_home" "$workspace_state"
-# A .git root still owns is left by a failed run of an earlier installer: hand it to the founder too.
+# A .git root still owns is left by an earlier installer that cloned as root and died before the
+# switch. Hand it to the founder, unless a file in it has a second name (a hard link could tie a
+# founder-owned path to a file root must not give away).
 if [ "$(stat -c %u "$checkout/.git")" = 0 ]; then
+  if [ -n "$(find "$checkout" ! -type d -links +1 -print -quit)" ]; then
+    printf 'The workspace checkout holds a hard link. Remove it, then install again.\n' >&2
+    exit 1
+  fi
   chown -hR "$founder:$founder" "$checkout"
-  make_branch=true
 fi
-if [ "$make_branch" = true ]; then
+# Ask Git, as the founder, whether the branch exists: a checkout the founder already owns (persist.sh
+# handed it over, or an earlier run died before the switch) may still lack it.
+if ! runuser -u "$founder" -- env HOME="$founder_home" git -C "$checkout" rev-parse --verify --quiet refs/heads/baron-workspace >/dev/null; then
   runuser -u "$founder" -- env HOME="$founder_home" git -C "$checkout" switch -c baron-workspace
 fi
 [ -d "$checkout/.git" ]
