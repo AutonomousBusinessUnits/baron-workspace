@@ -109,7 +109,11 @@ test("persist.sh refuses a hard link in a retained entry before it chowns", () =
 test("root creates nothing below the founder's home with install -d", () => {
   for (const script of [install, persist]) {
     for (const line of code(script).filter((l) => /\binstall -d\b/.test(l))) {
-      assert.doesNotMatch(line, /\$home|\$founder_home|\$target|\$checkout|\$workspace_state/, line);
+      assert.doesNotMatch(
+        line,
+        /\$home|\$founder_home|\$target|\$checkout|\$workspace_state/,
+        line,
+      );
     }
   }
   assert.match(persist, /^founder_mkdir "\$home\/\.local\/share"$/m);
@@ -147,14 +151,23 @@ test("every root operation on a founder-home path follows a symlink check of tha
     'systemctl start "$unit"',
   );
   before(persist, 'refuse_symlinks_under "$home" "$backup"', 'mv "$target" "$backup"');
-  before(install, 'refuse_symlinks_under "$founder_home" "$checkout"', "git clone", 'chown -hR "$founder:$founder" "$checkout"');
+  before(
+    install,
+    'refuse_symlinks_under "$founder_home" "$checkout"',
+    "git clone",
+    'chown -hR "$founder:$founder" "$checkout"',
+  );
   before(install, 'refuse_symlinks_under "$founder_home" "$workspace_state"', "founder_mkdir");
   // The recovery path stats and chowns the checkout's .git, so the second check precedes both.
   const lines = code(install);
-  const checks = lines.flatMap((l, i) => (l.includes('refuse_symlinks_under "$founder_home" "$checkout"') ? [i] : []));
+  const checks = lines.flatMap((l, i) =>
+    l.includes('refuse_symlinks_under "$founder_home" "$checkout"') ? [i] : [],
+  );
   assert.equal(checks.length, 2, "once before the clone, once before the recovery");
   assert.ok(checks[1] < lines.findIndex((l) => l.includes('stat -c %u "$checkout/.git"')));
-  assert.ok(checks[1] < lines.findIndex((l) => l.includes('chown -hR "$founder:$founder" "$checkout"')));
+  assert.ok(
+    checks[1] < lines.findIndex((l) => l.includes('chown -hR "$founder:$founder" "$checkout"')),
+  );
 });
 
 test("no git command runs as root in the founder's checkout", () => {
@@ -168,11 +181,21 @@ test("no git command runs as root in the founder's checkout", () => {
       assert.match(line, /^\s*git clone /, line);
       continue;
     }
-    assert.match(line, /runuser -u "\$founder" -- env HOME="\$founder_home" git -C "\$checkout" /, line);
+    assert.match(
+      line,
+      /runuser -u "\$founder" -- env HOME="\$founder_home" git -C "\$checkout" /,
+      line,
+    );
   }
-  assert.match(install, /^ {2}clone_parent=\$\(mktemp -d \/var\/tmp\/baron-workspace-clone\.XXXXXX\)$/m);
+  assert.match(
+    install,
+    /^ {2}clone_parent=\$\(mktemp -d \/var\/tmp\/baron-workspace-clone\.XXXXXX\)$/m,
+  );
   assert.match(install, /^ {2}clone=\$clone_parent\/checkout$/m);
-  assert.match(install, /^ {2}chgrp "\$founder" "\$clone_parent"\n {2}chmod 0710 "\$clone_parent"$/m);
+  assert.match(
+    install,
+    /^ {2}chgrp "\$founder" "\$clone_parent"\n {2}chmod 0710 "\$clone_parent"$/m,
+  );
   assert.doesNotMatch(install, /0711/);
 });
 
@@ -205,7 +228,10 @@ test("the founder's copy puts .git in last, through .git.partial", () => {
   assert.ok(partial < copy.indexOf('mv "$2/.git.partial" "$2/.git"'));
   assert.match(copy, /^\s*runuser -u "\$founder" -- /);
   // A leftover .git.partial or a partial tree is not empty, so the next install stops.
-  assert.match(install, /^ {2}\[ -z "\$\(find "\$checkout" -mindepth 1 -maxdepth 1 -print -quit\)" \]$/m);
+  assert.match(
+    install,
+    /^ {2}\[ -z "\$\(find "\$checkout" -mindepth 1 -maxdepth 1 -print -quit\)" \]$/m,
+  );
 });
 
 test("the founder's copy, run on a real tree, leaves .git last and complete", () => {
@@ -224,7 +250,10 @@ test("the founder's copy, run on a real tree, leaves .git last and complete", ()
     const run = spawnSync("bash", ["-c", script, "_", clone, checkout], { encoding: "utf8" });
     assert.equal(run.status, 0, run.stderr);
     assert.deepEqual(fs.readdirSync(checkout).sort(), [".git", ".hidden", "src"]);
-    assert.equal(fs.readFileSync(path.join(checkout, ".git/HEAD"), "utf8"), "ref: refs/heads/main\n");
+    assert.equal(
+      fs.readFileSync(path.join(checkout, ".git/HEAD"), "utf8"),
+      "ref: refs/heads/main\n",
+    );
     assert.equal(fs.existsSync(path.join(checkout, ".git.partial")), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -267,8 +296,14 @@ test("the branch is made whenever the founder's Git says it is missing", () => {
     };
     const missing = run("no");
     assert.equal(missing.length, 2);
-    assert.match(missing[0], /^-u abu-founder-1 -- env HOME=\/home\/abu-founder-1 git -C .* rev-parse --verify --quiet refs\/heads\/baron-workspace$/);
-    assert.match(missing[1], /^-u abu-founder-1 -- env HOME=\/home\/abu-founder-1 git -C .* switch -c baron-workspace$/);
+    assert.match(
+      missing[0],
+      /^-u abu-founder-1 -- env HOME=\/home\/abu-founder-1 git -C .* rev-parse --verify --quiet refs\/heads\/baron-workspace$/,
+    );
+    assert.match(
+      missing[1],
+      /^-u abu-founder-1 -- env HOME=\/home\/abu-founder-1 git -C .* switch -c baron-workspace$/,
+    );
     const present = run("yes");
     assert.equal(present.length, 1, "an existing branch is left alone");
     assert.match(present[0], /rev-parse/);
@@ -280,7 +315,9 @@ test("the branch is made whenever the founder's Git says it is missing", () => {
 test("a root-owned .git is handed to the founder only after the hard-link refusal", () => {
   const lines = code(install);
   const stat = lines.findIndex((l) => l.includes('stat -c %u "$checkout/.git"'));
-  const refusal = lines.findIndex((l) => l.includes('find "$checkout" ! -type d -links +1 -print -quit'));
+  const refusal = lines.findIndex((l) =>
+    l.includes('find "$checkout" ! -type d -links +1 -print -quit'),
+  );
   const chown = lines.findIndex((l) => l.includes('chown -hR "$founder:$founder" "$checkout"'));
   assert.ok(stat !== -1 && stat < refusal && refusal < chown);
   assert.match(lines[refusal + 1], /hard link/);
@@ -291,7 +328,14 @@ test("a root-owned .git is handed to the founder only after the hard-link refusa
 function refuse(home, target) {
   return spawnSync(
     "bash",
-    ["-c", 'source "$1"; refuse_symlinks_under "$2" "$3"', "_", path.join(__dirname, "founder-record.sh"), home, target],
+    [
+      "-c",
+      'source "$1"; refuse_symlinks_under "$2" "$3"',
+      "_",
+      path.join(__dirname, "founder-record.sh"),
+      home,
+      target,
+    ],
     { encoding: "utf8" },
   );
 }
@@ -359,7 +403,12 @@ function quiesce(survivors) {
     shim("pgrep", survivors ? "exit 0" : "exit 1");
     return spawnSync(
       "bash",
-      ["-c", 'source "$1"; founder=abu-founder-1; founder_uid=2102; quiesce_founder; echo continued', "_", path.join(__dirname, "founder-record.sh")],
+      [
+        "-c",
+        'source "$1"; founder=abu-founder-1; founder_uid=2102; quiesce_founder; echo continued',
+        "_",
+        path.join(__dirname, "founder-record.sh"),
+      ],
       { encoding: "utf8", env: { PATH: `${bin}:/usr/bin:/bin` } },
     );
   } finally {
@@ -378,7 +427,10 @@ test("quiesce_founder refuses to continue while the founder has a process", () =
 });
 
 test("persist.sh verifies each mount and unmounts one that is not the retained directory", () => {
-  assert.match(persist, /verify_bind_mount "\$home" "\$target" "\$retained" \|\| \{\n\s+systemctl stop "\$unit" \|\| true\n\s+exit 1/);
+  assert.match(
+    persist,
+    /verify_bind_mount "\$home" "\$target" "\$retained" \|\| \{\n\s+systemctl stop "\$unit" \|\| true\n\s+exit 1/,
+  );
   const lines = code(persist);
   const start = lines.findIndex((l) => l.includes('systemctl start "$unit"'));
   assert.ok(lines[start + 1].includes("verify_bind_mount"), "the check follows the mount at once");
@@ -389,7 +441,15 @@ test("persist.sh verifies each mount and unmounts one that is not the retained d
 function verifyMount(home, target, retained) {
   return spawnSync(
     "bash",
-    ["-c", 'source "$1"; verify_bind_mount "$2" "$3" "$4"', "_", path.join(__dirname, "founder-record.sh"), home, target, retained],
+    [
+      "-c",
+      'source "$1"; verify_bind_mount "$2" "$3" "$4"',
+      "_",
+      path.join(__dirname, "founder-record.sh"),
+      home,
+      target,
+      retained,
+    ],
     { encoding: "utf8" },
   );
 }
@@ -428,14 +488,25 @@ test("verify_bind_mount accepts a real bind mount and refuses one that hides ano
     const home = path.join(root, "home");
     const retained = path.join(root, "retained");
     const other = path.join(root, "other");
-    for (const dir of [path.join(home, "dir"), retained, other]) fs.mkdirSync(dir, { recursive: true });
+    for (const dir of [path.join(home, "dir"), retained, other])
+      fs.mkdirSync(dir, { recursive: true });
     // An unprivileged user namespace lets this run without root; skip where the host forbids it.
     const probe = spawnSync("unshare", ["-rm", "true"]);
     if (probe.status !== 0) return t.skip("user and mount namespaces are unavailable");
     const run = (body) =>
       spawnSync(
         "unshare",
-        ["-rm", "bash", "-c", `source "$1"; ${body}`, "_", path.join(__dirname, "founder-record.sh"), home, retained, other],
+        [
+          "-rm",
+          "bash",
+          "-c",
+          `source "$1"; ${body}`,
+          "_",
+          path.join(__dirname, "founder-record.sh"),
+          home,
+          retained,
+          other,
+        ],
         { encoding: "utf8" },
       );
     const good = run('mount --bind "$2" "$1/dir"; verify_bind_mount "$1" "$1/dir" "$2"');
