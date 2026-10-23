@@ -67,9 +67,10 @@ for entry in project state codex; do
     owner=$(stat -c %u "$retained")
     [ "$owner" = "$run_uid" ] || [ "$owner" = "$founder_uid" ] || { printf 'Workspace state has an unexpected owner.\n' >&2; exit 1; }
     # A routine run could have planted a hardlink to an inode it owns elsewhere; chown would hand
-    # that inode to the founder along with the entry.
-    if [ -n "$(find "$retained" ! -type d -links +1 -print -quit)" ]; then
-      printf 'Workspace state holds a hard link; remove it before the founder takes the entry.\n' >&2
+    # that inode to the founder along with the entry. An inode whose every name is in the entry
+    # (pnpm links node_modules to its store) hands over nothing else, so only a name outside counts.
+    if [ -n "$(find "$retained" ! -type d -links +1 -printf '%D:%i %n\n' | sort | uniq -c | awk '$1 != $3 { n++ } END { if (n) print n }')" ]; then
+      printf 'Workspace state holds a hard link to a file outside it; remove it before the founder takes the entry.\n' >&2
       exit 1
     fi
     chown -hR "$founder:$founder" "$retained"
