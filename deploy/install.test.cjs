@@ -82,27 +82,37 @@ test("persist.sh retires the run user's mount units and hands each entry to the 
   assert.match(persist, /baron-root-backup/);
 });
 
-test("persist.sh refuses a hard link in a retained entry before it chowns", () => {
-  const guard = 'find "$retained" ! -type d -links +1 -print -quit';
+test("persist.sh refuses a hard link to a file outside a retained entry before it chowns", () => {
+  const guard =
+    "find \"$retained\" ! -type d -links +1 -printf '%D:%i %n\\n' | sort | uniq -c | awk '$1 != $3 { n++ } END { if (n) print n }'";
   assert.ok(persist.includes(guard));
   assert.ok(persist.indexOf(guard) < persist.indexOf('chown -hR "$founder:$founder" "$retained"'));
   assert.match(persist, /hard link[^\n]*\\n' >&2\n\s+exit 1/);
-  // The same expression, run on a real tree: silent for plain files, a hit for a shared inode.
+  // The same expression, run on a real tree.
   const { mkdtempSync, writeFileSync, linkSync, mkdirSync, rmSync } = require("node:fs");
   const { tmpdir } = require("node:os");
   const { join } = require("node:path");
   const { execFileSync } = require("node:child_process");
-  const retained = mkdtempSync(join(tmpdir(), "baron-retained-"));
+  const parent = mkdtempSync(join(tmpdir(), "baron-retained-"));
+  const retained = join(parent, "project");
   try {
-    mkdirSync(join(retained, "sub"));
+    mkdirSync(join(retained, "sub"), { recursive: true });
     writeFileSync(join(retained, "sub", "a"), "x");
     const hits = () =>
-      execFileSync("bash", ["-c", `retained=$1; ${guard}`, "_", retained], { encoding: "utf8" });
+      execFileSync("bash", ["-c", `set -euo pipefail; retained=$1; ${guard}`, "_", retained], {
+        encoding: "utf8",
+      });
     assert.equal(hits(), "");
+    // pnpm's layout: a store file and its node_modules name, both inside the entry.
     linkSync(join(retained, "sub", "a"), join(retained, "b"));
-    assert.notEqual(hits(), "");
+    linkSync(join(retained, "sub", "a"), join(retained, "c"));
+    assert.equal(hits(), "");
+    // A second name outside the entry is the inode chown would hand over.
+    writeFileSync(join(parent, "elsewhere"), "y");
+    linkSync(join(parent, "elsewhere"), join(retained, "planted"));
+    assert.equal(hits(), "1\n");
   } finally {
-    rmSync(retained, { recursive: true, force: true });
+    rmSync(parent, { recursive: true, force: true });
   }
 });
 
