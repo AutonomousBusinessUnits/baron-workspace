@@ -160,19 +160,38 @@ describe("the founder's Codex config", () => {
       '[[mcp_servers]]\nname = "x"\n',
       // A header this reader cannot parse counts as taken.
       '[mcp_servers.bu\u00dfiness]\ncommand = "x"\n',
+      // So does one inside a multi-line string: two such lines are never written.
+      'notes = """\n[mcp_servers.business]\n"""\n',
     ]) {
       expect(withFounderTools(own, "bakery", client), own).toBe("conflict");
       // Our own stale block beside it changes nothing either.
       expect(withFounderTools(`${own}\n${block}\n`, "bakery", client), own).toBe("conflict");
     }
-    // Another server, a profile's own servers and a string are not this table.
+    // Another server and a profile's own servers are not this table.
     for (const other of [
       '[mcp_servers.docs]\ncommand = "docs-mcp"\n',
       '[profiles.work.mcp_servers.business]\ncommand = "x"\n',
-      'notes = """\n[mcp_servers.business]\n"""\n',
     ]) {
       expect(withFounderTools(other, "bakery", client), other).toBe(`${other}\n${block}\n`);
     }
+  });
+
+  it("fails toward conflict when a triple quote leaves the reader unsure", () => {
+    // A triple quote inside a one-line string: the block must never be written twice.
+    const quoted = "quote = \"'''\"\n";
+    const first = withFounderTools(quoted, "bakery", client);
+    if (first !== "conflict") {
+      const second = withFounderTools(first, "bakery", client);
+      expect(second === "conflict" || second === first).toBe(true);
+    }
+    expect(first).toBe("conflict");
+    expect(withFounderTools(`${quoted}\n${block}\n`, "bakery", null)).toBe("conflict");
+    // The quote closes later, so only the count of headers catches the stale block.
+    const closed = `a = "'''"\n\n${block}\nb = "'''"\n`;
+    expect(withFounderTools(closed, "bakery", client)).toBe("conflict");
+    // A triple quote in a comment hides the founder's own table.
+    const commented = 'model = "x" # see """ docs\n[mcp_servers.business]\ncommand = "mine"\n';
+    expect(withFounderTools(commented, "bakery", client)).toBe("conflict");
   });
 
   it("names only this business's client", () => {

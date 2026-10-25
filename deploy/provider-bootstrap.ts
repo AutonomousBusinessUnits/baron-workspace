@@ -92,23 +92,32 @@ function keyParts(key: string): string[] | null {
   return parts;
 }
 
-/** Each line's role; a line inside a multi-line string is only text. */
-function classify(lines: readonly string[]): TomlLine[] {
+function headerOf(line: string): TomlLine | null {
+  const header = HEADER.exec(line);
+  return header && { kind: "header", path: keyParts(header[2]!), array: header[1] === "[[" };
+}
+
+/**
+ * Each line's role; a line inside a multi-line string is only text. A triple quote inside a
+ * one-line string or a comment also opens one here, so `unclosed` tells the caller to give up.
+ */
+function classify(lines: readonly string[]): { kinds: TomlLine[]; unclosed: boolean } {
   let open: string | null = null;
   const odd = (line: string, quote: string) => line.split(quote).length % 2 === 0;
-  return lines.map((line): TomlLine => {
+  const kinds = lines.map((line): TomlLine => {
     if (open) {
       if (odd(line, open)) open = null;
       return { kind: "string" };
     }
     if (/^\s*#/.test(line)) return { kind: "other" };
-    const header = HEADER.exec(line);
+    const header = headerOf(line);
     const key = header ? null : KEY_LINE.exec(line);
     open = MULTILINE_QUOTES.find((quote) => odd(line, quote)) ?? null;
-    if (header) return { kind: "header", path: keyParts(header[2]!), array: header[1] === "[[" };
+    if (header) return header;
     if (key) return { kind: "key", path: keyParts(key[1]!) };
     return { kind: "other" };
   });
+  return { kinds, unclosed: open !== null };
 }
 
 const isBusinessTable = (line: TomlLine | undefined) =>
@@ -119,8 +128,7 @@ const isBusinessTable = (line: TomlLine | undefined) =>
   line.path[1] === "business";
 
 /** Drops this installer's block: its markers, its table and the table's keys, wherever they are. */
-function withoutFounderTools(lines: readonly string[]): string[] {
-  const kinds = classify(lines);
+function withoutFounderTools(lines: readonly string[], kinds: readonly TomlLine[]): string[] {
   const drop = new Set<number>();
   for (let i = 0; i < lines.length; i++) {
     const text = lines[i]!.trimEnd();
@@ -145,7 +153,7 @@ function withoutFounderTools(lines: readonly string[]): string[] {
 /** Whether a header or key defines mcp_servers.business, or leaves no room for that table. */
 function definesBusiness(lines: readonly string[]): boolean {
   let table: string[] = [];
-  const kinds = classify(lines);
+  const { kinds } = classify(lines);
   for (let i = 0; i < lines.length; i++) {
     const line = kinds[i]!;
     // A header this reader can't parse (a TOML 1.1 bare key, say) that names mcp_servers.
@@ -175,7 +183,10 @@ export function withFounderTools(
 ): string | "conflict" {
   checkFounderTools(slug, client);
   const lines = config.split("\n");
-  const kept = withoutFounderTools(lines);
+  const { kinds, unclosed } = classify(lines);
+  // Unsure where strings end: neither our block nor the founder's table can be found for certain.
+  if (unclosed) return "conflict";
+  const kept = withoutFounderTools(lines, kinds);
   const base = kept.join("\n").trimEnd();
   if (client === null) {
     if (kept.length === lines.length) return config;
@@ -189,7 +200,10 @@ export function withFounderTools(
     `args = [${[client, "--abu", slug].map((arg) => JSON.stringify(arg)).join(", ")}]`,
     FOUNDER_TOOLS_END,
   ].join("\n");
-  return base ? `${base}\n\n${block}\n` : `${block}\n`;
+  const next = base ? `${base}\n\n${block}\n` : `${block}\n`;
+  // Strings or not, Codex refuses a second table of this name, so never write one.
+  const tables = next.split("\n").filter((line) => isBusinessTable(headerOf(line) ?? undefined));
+  return tables.length === 1 ? next : "conflict";
 }
 
 /** The founder's half: run as the founder, never root, it changes only ~/.codex/config.toml. */
