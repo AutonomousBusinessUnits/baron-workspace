@@ -534,3 +534,107 @@ test("provider-bootstrap.ts takes the founder from the unit record", () => {
   assert.match(bootstrap, /\/etc\/abu\/harness\/\$\{slug\}\/unit\.json/);
   assert.match(bootstrap, /founder_user/);
 });
+
+// The text of one top-level function in provider-bootstrap.ts.
+function bootstrapFunction(name) {
+  const start = bootstrap.search(new RegExp(`^(export )?(async )?function ${name}\\(`, "m"));
+  assert.notEqual(start, -1, `${name} is missing`);
+  return bootstrap.slice(start, bootstrap.indexOf("\n}\n", start) + 2);
+}
+
+// Runs the founder's half of provider-bootstrap.ts against a home in a temporary folder.
+function founderTools(home, client) {
+  return spawnSync(
+    process.execPath,
+    [path.join(__dirname, "provider-bootstrap.ts"), "--founder-tools", "bakery", client],
+    { encoding: "utf8", timeout: 10_000, env: { PATH: process.env.PATH, HOME: home } },
+  );
+}
+const CLIENT = "/opt/abu/founder-tools/bakery/founder-mcp.mjs";
+
+test("the founder tools are written as the founder, never by root into the founder's home", () => {
+  // Root's half only checks the command and hands the write to the founder.
+  const root = bootstrapFunction("installFounderTools");
+  assert.match(root, /"runuser"/);
+  assert.match(root, /"-u",\s*founder,\s*"--",\s*"env",\s*`HOME=\$\{home\}`/);
+  assert.match(root, /"--founder-tools"/);
+  assert.doesNotMatch(
+    root,
+    /writeFileSync|appendFileSync|renameSync|openSync|mkdirSync|rmSync|unlinkSync|copyFileSync|chown|chmod/,
+  );
+  // The founder's half refuses to run as root.
+  assert.match(bootstrapFunction("writeFounderTools"), /process\.getuid\?\.\(\) === 0/);
+
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "baron-founder-tools-"));
+  try {
+    const codex = path.join(home, ".codex");
+    const config = path.join(codex, "config.toml");
+    // No config yet: one is made, readable by the founder only.
+    const made = founderTools(home, CLIENT);
+    assert.equal(made.status, 0, made.stderr);
+    assert.equal(made.stdout, "written\n");
+    assert.equal(fs.statSync(config).mode & 0o777, 0o600);
+    // An existing config is replaced through a new file renamed over it, never written in place.
+    fs.writeFileSync(config, 'model = "gpt-5.5"\n', { mode: 0o640 });
+    fs.chmodSync(config, 0o640);
+    fs.linkSync(config, path.join(home, "second-name"));
+    const written = founderTools(home, CLIENT);
+    assert.equal(written.status, 0, written.stderr);
+    assert.equal(written.stdout, "written\n");
+    const text = fs.readFileSync(config, "utf8");
+    assert.ok(text.startsWith('model = "gpt-5.5"\n\n# baron-founder-tools: begin'));
+    assert.ok(text.includes(`args = ["${CLIENT}", "--abu", "bakery"]`));
+    assert.equal(fs.readFileSync(path.join(home, "second-name"), "utf8"), 'model = "gpt-5.5"\n');
+    assert.equal(fs.statSync(config).mode & 0o777, 0o640);
+    assert.deepEqual(fs.readdirSync(codex), ["config.toml"], "no temporary file is left");
+    const again = founderTools(home, CLIENT);
+    assert.equal(again.stdout, "unchanged\n");
+    // A missing command removes the block.
+    const removed = founderTools(home, "-");
+    assert.equal(removed.status, 0, removed.stderr);
+    assert.equal(removed.stdout, "removed\n");
+    assert.equal(fs.readFileSync(config, "utf8"), 'model = "gpt-5.5"\n');
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a conflict warns and the install goes on", () => {
+  // Root's half: after the login, a conflict is one warning line, never a failed install.
+  const install = bootstrapFunction("installBusinessCodex");
+  const login = install.indexOf("bootstrapBusinessCodex(");
+  const tools = install.indexOf("installFounderTools(slug, founder, home)");
+  assert.ok(login !== -1 && tools > login, "the founder tools follow the login");
+  assert.match(install, /=== "conflict"\)\s*process\.stderr\.write\(/);
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "baron-founder-conflict-"));
+  try {
+    const codex = path.join(home, ".codex");
+    const config = path.join(codex, "config.toml");
+    fs.mkdirSync(codex);
+    // The founder's own [mcp_servers.business]: left exactly as it was.
+    const own = '[mcp_servers.business]\ncommand = "mine"\n';
+    fs.writeFileSync(config, own);
+    const mine = founderTools(home, CLIENT);
+    assert.equal(mine.status, 0, mine.stderr);
+    assert.equal(mine.stdout, "conflict\n");
+    assert.equal(fs.readFileSync(config, "utf8"), own);
+    // A symlinked config.toml: neither the link nor what it names changes.
+    fs.rmSync(config);
+    const elsewhere = path.join(home, "elsewhere.toml");
+    fs.writeFileSync(elsewhere, 'model = "gpt-5.5"\n');
+    fs.symlinkSync(elsewhere, config);
+    const linked = founderTools(home, CLIENT);
+    assert.equal(linked.status, 0, linked.stderr);
+    assert.equal(linked.stdout, "conflict\n");
+    assert.ok(fs.lstatSync(config).isSymbolicLink());
+    assert.equal(fs.readFileSync(elsewhere, "utf8"), 'model = "gpt-5.5"\n');
+    // A config.toml that is not a regular file, here a FIFO nobody writes to, does not hang.
+    fs.rmSync(config);
+    assert.equal(spawnSync("mkfifo", [config]).status, 0);
+    const fifo = founderTools(home, CLIENT);
+    assert.equal(fifo.status, 0, fifo.stderr);
+    assert.equal(fifo.stdout, "conflict\n");
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
